@@ -7,7 +7,7 @@
 import time
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 
 # Load environment first
@@ -147,27 +147,28 @@ class WyckoffBot:
         """
         try:
             # 1. Fetch data
-            print("📥 Fetching market data...")
+            print("   [2/4] 📥 Đang lấy dữ liệu thị trường...")
             df = self.fetcher.get_candles(n_bars=N_CANDLES, interval='15m')
             
             if df is None or df.empty:
+                print("   ❌ Không lấy được dữ liệu!")
                 return None
             
             # 2. Get realtime price
             rt = self.fetcher.get_realtime_price()
-            print(f"💰 Realtime: ${rt.get('price', 'N/A')}")
+            print(f"   💰 Giá hiện tại: ${rt.get('price', 'N/A')}")
             
             # 3. Technical indicators
-            print("📈 Calculating indicators...")
+            print("   [3/4] 📈 Đang tính toán indicators...")
             df = calculate_indicators(df)
             indicators = get_indicator_summary(df)
             
             # 4. Wyckoff Analysis
-            print("🔮 Wyckoff Analysis...")
+            print("   🔮 Phân tích Wyckoff...")
             wyckoff_result = self.wyckoff.analyze(df)
             
             # 5. SMC Analysis
-            print("🎯 SMC Analysis...")
+            print("   🎯 Phân tích SMC...")
             smc_result = self.smc.analyze(df)
             
             # 6. Pattern Detection
@@ -350,32 +351,37 @@ class WyckoffBot:
                         pass
                 
                 # Analyze market
+                print("🔍 [1/4] Bắt đầu phân tích thị trường...")
                 signal = self.analyze_market()
                 
                 if signal:
                     action = signal.get('action', 'WAIT')
                     confidence = signal.get('confidence', 0)
                     
-                    print(f"\n📊 RESULT:")
-                    print(f"   Action: {action}")
-                    print(f"   Confidence: {confidence}%")
-                    print(f"   Event: {signal.get('event_detected', 'NONE')}")
-                    print(f"   Reason: {signal.get('reason', 'N/A')[:80]}...")
+                    print(f"\n✅ [4/4] PHÂN TÍCH XONG!")
+                    print(f"━━━━━━━━━━━━━━━━━━━━━")
+                    print(f"   🎯 Action: {action}")
+                    print(f"   📊 Confidence: {confidence}%")
+                    print(f"   ⚡ Event: {signal.get('event_detected', 'NONE')}")
+                    print(f"   💡 Reason: {signal.get('reason', 'N/A')[:80]}...")
+                    print(f"━━━━━━━━━━━━━━━━━━━━━")
                     
                     # Get current price for display
                     rt = self.fetcher.get_realtime_price()
                     current_price = rt.get('price') if rt else None
                     
                     # Always send analysis result to Telegram
-                    print("\n📤 Sending result to Telegram...")
+                    print("\n📤 Đang gửi kết quả về Telegram...")
                     self.telegram.send_analysis_result(signal, current_price)
+                    print("✅ Đã gửi về Telegram!")
                     
                     # If BUY/SELL with high confidence, also send full signal
                     if action in ['BUY', 'SELL'] and confidence >= 50:
-                        print("🎯 Sending FULL SIGNAL to Telegram...")
+                        print("🎯 Gửi TÍN HIỆU ĐẦY ĐỦ về Telegram...")
                         self.telegram.send_wyckoff_signal(signal)
+                        print("✅ Đã gửi tín hiệu!")
                 
-                print(f"\n😴 Sleeping for {LOOP_INTERVAL//60} minutes...")
+                print(f"\n😴 Nghỉ {LOOP_INTERVAL//60} phút... (Loop tiếp theo lúc {(datetime.now() + timedelta(seconds=LOOP_INTERVAL)).strftime('%H:%M:%S')})")
                 time.sleep(LOOP_INTERVAL)
                 
             except KeyboardInterrupt:

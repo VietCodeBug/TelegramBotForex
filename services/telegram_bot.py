@@ -531,11 +531,25 @@ Sử dụng /stop để tiếp tục sau khi tin qua.
             self._poll_forever()
     
     def _poll_forever(self):
-        """Polling loop"""
-        try:
-            self.bot.infinity_polling(timeout=60, long_polling_timeout=5)
-        except Exception as e:
-            print(f"❌ Polling error: {e}")
+        """Polling loop with error 409 handling"""
+        import time as time_module
+        retry_delay = 5
+        max_delay = 60
+        
+        while True:
+            try:
+                self.bot.infinity_polling(timeout=60, long_polling_timeout=5)
+            except Exception as e:
+                error_msg = str(e)
+                
+                if "409" in error_msg or "Conflict" in error_msg:
+                    # Error 409: Another bot instance running
+                    print(f"⚠️ Bot conflict detected. Waiting {retry_delay}s...")
+                    time_module.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_delay)
+                else:
+                    print(f"❌ Polling error: {error_msg[:100]}")
+                    time_module.sleep(5)
 
 
 # Quick test
