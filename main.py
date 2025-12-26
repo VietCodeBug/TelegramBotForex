@@ -6,12 +6,30 @@
 """
 import time
 import sys
+import os
 from datetime import datetime
 import threading
 
 # Load environment first
 from dotenv import load_dotenv
 load_dotenv()
+
+# Flask for health check (Render Web Service)
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def health():
+    return "🏅 Wyckoff Bot is running!"
+
+@app.route('/health')
+def health_check():
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+def run_flask():
+    """Run Flask in background thread"""
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, threaded=True)
 
 # Import config
 from config import (
@@ -377,6 +395,11 @@ class WyckoffBot:
     
     def start(self):
         """Khởi động bot"""
+        # Start Flask health server in background (for Render Web Service)
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        print("🌐 Health server started!")
+        
         # Start Telegram polling in background
         self.telegram.start_polling(threaded=True)
         

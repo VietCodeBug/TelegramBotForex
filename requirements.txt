@@ -4,18 +4,18 @@ pyTelegramBotAPI>=4.14.0
 google-generativeai>=0.3.0
 
 # Data & Technical Analysis
-tvDatafeed>=2.1.0
 pandas>=2.0.0
 pandas-ta>=0.3.14b
 numpy>=1.24.0
+yfinance>=0.2.0
+
+# Web Server (Render)
+flask>=3.0.0
+gunicorn>=21.0.0
 
 # Firebase
-firebase-admin>=6.2.0
-
-# Chart Visualization (Optional - Level 2+)
-mplfinance>=0.12.10b0
-matplotlib>=3.7.0
+requests>=2.31.0
 
 # Utilities
-requests>=2.31.0
+beautifulsoup4>=4.12.0
 schedule>=1.2.0
