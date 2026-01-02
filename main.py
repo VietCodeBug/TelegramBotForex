@@ -128,14 +128,16 @@ class WyckoffBot:
         self._setup_telegram_callbacks()
         print("✅")
         
-        # 9. Signal Crawler (Telegram channels)
+        # 9. Signal Crawler (Telegram channels) - Truyền AI engine để phân tích
         print("📡 Initializing Signal Crawler...", end=" ")
-        self.signal_crawler = SignalCrawler(self.firebase)
+        self.signal_crawler = SignalCrawler(self.firebase, self.ai)
         print("✅")
         
         # Track last signal check
         self.last_signal_check = None
         self.known_signals = set()  # Track đã xử lý signals nào
+        self.known_news = set()  # Track tin tức đã thông báo
+        self.last_news_check = None  # Thời gian check tin tức cuối
         
         print("-" * 50)
         print("✅ TẤT CẢ COMPONENTS ĐÃ SẴN SÀNG!\n")
@@ -149,11 +151,35 @@ class WyckoffBot:
         self.telegram.on_get_tintuc = self.get_tintuc_text  # Tin tức tiếng Việt
         self.telegram.on_get_signals = self.get_signals_text  # Tín hiệu từ kênh
         self.telegram.on_get_stats = self.get_signal_stats_text  # Thống kê
+        self.telegram.on_crawl_news = self.crawl_news_text  # Crawl tin tức từ kênh
+    
+    def crawl_news_text(self) -> str:
+        """Crawl tin tức mới từ các kênh Telegram và trả về text"""
+        try:
+            # Crawl tin tức
+            news_count = self.check_news_updates()
+            
+            # Format kết quả
+            news_text = self.signal_crawler.format_news_for_telegram()
+            
+            return f"""
+📰 *KẾT QUẢ CRAWL TIN TỨC*
+━━━━━━━━━━━━━━━━━━
+
+✅ Đã tìm thấy {news_count} tin tức mới quan trọng!
+
+{news_text}
+
+━━━━━━━━━━━━━━━━━━
+💡 Tin tức HIGH impact sẽ được tự động thông báo!
+"""
+        except Exception as e:
+            return f"❌ Lỗi crawl tin tức: {str(e)[:100]}"
     
     def check_external_signals(self):
         """
         Kiểm tra tín hiệu mới từ các kênh Telegram
-        Nếu có tín hiệu mới → AI phân tích → Gửi thông báo
+        Nếu có tín hiệu mới → AI phân tích (text + ảnh chart) → Gửi thông báo
         """
         try:
             signals = self.signal_crawler.crawl_all_channels()
@@ -175,15 +201,71 @@ class WyckoffBot:
                 rt = self.fetcher.get_realtime_price()
                 current_price = rt.get('price') if rt else None
                 
-                # AI phân tích
-                ai_result = self.ai.analyze_external_signal(sig.to_dict(), current_price)
+                # 1️⃣ AI phân tích TEXT tín hiệu
+                sig = self.signal_crawler.analyze_signal_with_ai(sig, current_price)
                 
-                # Gửi thông báo
-                self._send_signal_notification(sig, ai_result, current_price)
+                ai_result = {
+                    'recommendation': sig.ai_recommendation,
+                    'confidence': sig.ai_confidence,
+                    'reason': sig.ai_analysis
+                }
+                
+                # 2️⃣ Nếu có ảnh chart → AI phân tích ẢNH
+                chart_analysis = None
+                if sig.image_url:
+                    print(f"📸 Analyzing chart image from @{sig.source}...")
+                    try:
+                        chart_analysis = self.ai.analyze_chart_image(
+                            image_url=sig.image_url,
+                            signal_data={
+                                'action': sig.action,
+                                'entry': sig.entry,
+                                'stoploss': sig.stoploss,
+                                'takeprofit': sig.takeprofit
+                            }
+                        )
+                        
+                        # Merge chart analysis vào kết quả
+                        if chart_analysis.get('recommendation'):
+                            # Ưu tiên chart analysis nếu có
+                            chart_rec = chart_analysis['recommendation']
+                            chart_conf = chart_analysis.get('confidence', 0)
+                            
+                            # Trung bình confidence từ 2 nguồn
+                            combined_conf = (sig.ai_confidence + chart_conf) // 2
+                            
+                            # Nếu chart nói SKIP thì ưu tiên SKIP
+                            if chart_rec == 'SKIP':
+                                ai_result['recommendation'] = 'SKIP'
+                                ai_result['confidence'] = chart_conf
+                            # Nếu chart nói CAUTION và text nói FOLLOW -> CAUTION
+                            elif chart_rec == 'CAUTION' and sig.ai_recommendation == 'FOLLOW':
+                                ai_result['recommendation'] = 'CAUTION'
+                                ai_result['confidence'] = combined_conf
+                            # Nếu cả 2 đều FOLLOW -> tăng confidence
+                            elif chart_rec == 'FOLLOW' and sig.ai_recommendation == 'FOLLOW':
+                                ai_result['confidence'] = min(95, combined_conf + 10)
+                            
+                            # Merge reason
+                            chart_reason = chart_analysis.get('reason', '')
+                            if chart_reason:
+                                ai_result['reason'] = f"{sig.ai_analysis} | Chart: {chart_reason}"
+                            
+                            print(f"✅ Chart analysis: {chart_rec} ({chart_conf}%)")
+                            
+                    except Exception as img_err:
+                        print(f"⚠️ Chart analysis failed: {img_err}")
+                        chart_analysis = None
+                
+                # Gửi thông báo (kèm chart analysis nếu có)
+                self._send_signal_notification(sig, ai_result, current_price, chart_analysis)
                 
                 # Lưu vào Firebase
                 if self.firebase:
-                    self.firebase.save_external_signal(sig.to_dict(), ai_result)
+                    signal_dict = sig.to_dict()
+                    if chart_analysis:
+                        signal_dict['chart_analysis'] = chart_analysis
+                    self.firebase.save_external_signal(signal_dict, ai_result)
             
             return len(new_signals)
             
@@ -191,10 +273,119 @@ class WyckoffBot:
             print(f"❌ Signal check error: {e}")
             return 0
     
-    def _send_signal_notification(self, signal, ai_result, current_price=None):
-        """Gửi thông báo tín hiệu mới qua Telegram (kèm ảnh nếu có)"""
+    def check_news_updates(self):
+        """
+        Kiểm tra tin tức mới từ các kênh Telegram tin tức
+        Nếu có tin quan trọng → AI phân tích → Tự động thông báo
+        """
+        try:
+            print("📰 Checking news from Telegram channels...")
+            
+            # Crawl tin tức mới
+            news_list = self.signal_crawler.get_new_important_news()
+            
+            new_news_count = 0
+            for news in news_list:
+                # Tạo unique key
+                news_key = f"{news.source}_{news.message_id}"
+                
+                if news_key not in self.known_news:
+                    self.known_news.add(news_key)
+                    
+                    # Chỉ xử lý tin HIGH impact
+                    if news.impact == 'HIGH':
+                        print(f"🔴 HIGH IMPACT NEWS: {news.title[:50]}...")
+                        
+                        # AI phân tích tin tức
+                        news = self.signal_crawler.analyze_news_with_ai(news)
+                        
+                        # Gửi thông báo
+                        self._send_news_notification(news)
+                        new_news_count += 1
+                    
+                    elif news.impact == 'MEDIUM':
+                        print(f"🟡 MEDIUM NEWS: {news.title[:50]}...")
+                        new_news_count += 1
+            
+            self.last_news_check = datetime.now()
+            return new_news_count
+            
+        except Exception as e:
+            print(f"❌ News check error: {e}")
+            return 0
+    
+    def _send_news_notification(self, news):
+        """Gửi thông báo tin tức quan trọng qua Telegram"""
+        impact_emoji = '🔴' if news.impact == 'HIGH' else '🟡'
+        gold_emoji = '📈' if news.ai_impact_on_gold == 'BULLISH' else '📉' if news.ai_impact_on_gold == 'BEARISH' else '➖'
+        
+        message = f"""
+{impact_emoji} *TIN TỨC QUAN TRỌNG*
+━━━━━━━━━━━━━━━━━━
+
+📰 *{news.title[:150]}*
+
+🌍 Tiền tệ: {news.currency}
+⏰ {news.timestamp}
+📢 Nguồn: @{news.source}
+
+{gold_emoji} *ẢNH HƯỞNG VÀNG:* {news.ai_impact_on_gold if news.ai_impact_on_gold else 'Đang phân tích...'}
+
+📝 *PHÂN TÍCH AI:*
+{news.ai_summary if news.ai_summary else 'Không có phân tích'}
+
+━━━━━━━━━━━━━━━━━━
+⚠️ *Lưu ý:* Cân nhắc kỹ trước khi vào lệnh!
+"""
+        
+        try:
+            # Gửi ảnh nếu có
+            if news.image_url:
+                try:
+                    self.telegram.bot.send_photo(
+                        self.telegram.chat_id,
+                        news.image_url,
+                        caption=message,
+                        parse_mode='Markdown'
+                    )
+                    print(f"📸 Đã gửi tin tức kèm ảnh từ @{news.source}")
+                    return
+                except Exception as img_err:
+                    print(f"⚠️ Không gửi được ảnh tin tức: {img_err}")
+            
+            # Gửi text
+            self.telegram.send_message(message)
+            print(f"📰 Đã gửi thông báo tin tức từ @{news.source}")
+            
+        except Exception as e:
+            print(f"❌ Send news notification error: {e}")
+    
+    def _send_signal_notification(self, signal, ai_result, current_price=None, chart_analysis=None):
+        """Gửi thông báo tín hiệu mới qua Telegram (kèm ảnh và phân tích chart)"""
         emoji = '🟢' if signal.action == 'BUY' else '🔴'
         rec_emoji = '✅' if ai_result.get('recommendation') == 'FOLLOW' else '⚠️' if ai_result.get('recommendation') == 'CAUTION' else '❌'
+        
+        # Build chart insights section
+        chart_section = ""
+        if chart_analysis:
+            trend_emoji = "📈" if "UP" in chart_analysis.get('trend', '') else "📉" if "DOWN" in chart_analysis.get('trend', '') else "➖"
+            pattern_text = f"\n🎯 Pattern: {chart_analysis.get('pattern')}" if chart_analysis.get('pattern') else ""
+            
+            # Format support/resistance levels
+            support_text = ""
+            if chart_analysis.get('support_levels'):
+                supports = chart_analysis['support_levels'][:3]  # Max 3
+                support_text = f"\n🛡️ Support: {', '.join(map(str, supports))}"
+            
+            resistance_text = ""
+            if chart_analysis.get('resistance_levels'):
+                resistances = chart_analysis['resistance_levels'][:3]  # Max 3
+                resistance_text = f"\n🎯 Resistance: {', '.join(map(str, resistances))}"
+            
+            chart_section = f"""
+📊 *PHÂN TÍCH CHART:*
+{trend_emoji} Trend: {chart_analysis.get('trend', 'N/A')}{pattern_text}{support_text}{resistance_text}
+"""
         
         message = f"""
 📡 *TÍN HIỆU MỚI TỪ KÊNH*
@@ -205,7 +396,7 @@ class WyckoffBot:
 🛡️ SL: {signal.stoploss}
 🎯 TP: {signal.takeprofit}
 📢 Source: @{signal.source}
-
+{chart_section}
 {rec_emoji} *AI NHẬN ĐỊNH:*
 📊 Recommendation: {ai_result.get('recommendation', 'N/A')}
 💯 Confidence: {ai_result.get('confidence', 0)}%
@@ -429,23 +620,24 @@ class WyckoffBot:
         Lấy tin tức và dịch sang tiếng Việt
         """
         try:
-            events = self.news.get_high_impact_news('USD')
+            # Lấy tất cả tin quan trọng (không chỉ USD)
+            events = self.news.get_high_impact_news()
             
             if not events:
                 return "📃 *TIN TỨC KINH TẾ*\n\n✅ Không có tin quan trọng hôm nay."
             
             lines = [
-                "📃 *TIN TỨC KINH TẾ (Tiếng Việt)*",
+                "📃 *TIN TỨC KINH TẾ HÔM NAY*",
                 "━━━━━━━━━━━━━━━━━━━━━",
                 ""
             ]
             
-            for event in events[:8]:
-                impact_icon = "🔴" if event.impact == 'HIGH' else "🟡"
+            for event in events[:10]:  # Tăng lên 10 tin
+                impact_icon = "🔴" if event.impact == 'HIGH' else "🟡" if event.impact == 'MEDIUM' else "⚪"
                 name_vi = event.title_vi if event.title_vi else event.event
                 
                 lines.append(f"{impact_icon} *{event.time}* - {event.currency}")
-                lines.append(f"   📰 {name_vi}")
+                lines.append(f"   📰 {name_vi[:60]}")
                 
                 if event.forecast:
                     lines.append(f"   📊 Dự báo: {event.forecast} | Trước: {event.previous}")
@@ -553,6 +745,17 @@ class WyckoffBot:
                         print("📭 No new signals from channels")
                 except Exception as e:
                     print(f"⚠️ Signal check error: {str(e)[:50]}")
+                
+                # 📰 CHECK NEWS UPDATES - Auto check tin tức từ kênh Telegram
+                print("\n📰 Checking news updates from Telegram channels...")
+                try:
+                    new_news_count = self.check_news_updates()
+                    if new_news_count > 0:
+                        print(f"✅ Found {new_news_count} new important news!")
+                    else:
+                        print("📭 No new important news")
+                except Exception as e:
+                    print(f"⚠️ News check error: {str(e)[:50]}")
                 
                 print(f"\n😴 Nghỉ {LOOP_INTERVAL//60} phút... (Loop tiếp theo lúc {(datetime.now() + timedelta(seconds=LOOP_INTERVAL)).strftime('%H:%M:%S')})")
                 time.sleep(LOOP_INTERVAL)

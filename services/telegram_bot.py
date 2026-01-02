@@ -26,7 +26,8 @@ class TelegramCommandBot:
         'news': '📰 Tin tức kinh tế hôm nay',
         'tintuc': '📃 Lấy tin tức + dịch sang tiếng Việt',
         'signals': '📡 Xem tín hiệu từ các kênh Telegram',
-        'stats': '📊 Thống kê WIN/LOSS của các kênh'
+        'stats': '📊 Thống kê WIN/LOSS của các kênh',
+        'crawlnews': '📰 Crawl tin tức mới từ kênh Telegram'
     }
     
     def __init__(self, token: str, chat_id: str, firebase_service=None):
@@ -50,6 +51,7 @@ class TelegramCommandBot:
         self.on_get_news: Optional[Callable] = None
         self.on_get_signals: Optional[Callable] = None  # Tín hiệu từ kênh
         self.on_get_stats: Optional[Callable] = None  # Thống kê tín hiệu
+        self.on_crawl_news: Optional[Callable] = None  # Crawl tin tức từ kênh
         
         # User configs (từ Firebase hoặc local)
         self.user_config = {
@@ -115,6 +117,23 @@ class TelegramCommandBot:
         @self.bot.message_handler(commands=['stats'])
         def handle_stats(message):
             self._cmd_stats(message)
+        
+        @self.bot.message_handler(commands=['crawlnews'])
+        def handle_crawlnews(message):
+            self._cmd_crawlnews(message)
+    
+    def _cmd_crawlnews(self, message):
+        """Handler cho /crawlnews - Crawl tin tức từ kênh Telegram"""
+        self._send_message("📰 Đang crawl tin tức từ các kênh Telegram...", message.chat.id)
+        
+        if self.on_crawl_news:
+            try:
+                result = self.on_crawl_news()
+                self._send_message(result, message.chat.id)
+            except Exception as e:
+                self._send_message(f"❌ Lỗi: {str(e)[:100]}", message.chat.id)
+        else:
+            self._send_message("⚠️ Chức năng chưa được kết nối.", message.chat.id)
     
     def _cmd_start(self, message):
         """Handler cho /start"""
@@ -141,10 +160,19 @@ Chào mừng bạn đến với hệ thống giao dịch XAU/USD thông minh!
 /status - 📊 Trạng thái Bot
 /news - 📰 Tin tức kinh tế
 /tintuc - 📃 Tin tức + Dịch tiếng Việt
+/signals - 📡 Tín hiệu từ kênh Telegram
+/crawlnews - 📰 Crawl tin tức mới
+/stats - 📊 Thống kê tín hiệu
 /stop - 🛑 Tạm dừng Bot
 
 ━━━━━━━━━━━━━━━━━━━━━
-💡 Bot sẽ tự động gửi tín hiệu khi phát hiện setup Wyckoff!
+📡 *KÊNH TÍN HIỆU:*
+@ducforex6789 | @vnscalping | @XAUUSDINSIDER_FX
+
+📰 *KÊNH TIN TỨC:*
+@lichkinhte
+
+💡 Bot sẽ tự động gửi tín hiệu và tin tức quan trọng!
 """
         self._send_message(welcome, message.chat.id)
     
@@ -450,8 +478,12 @@ Sử dụng /stop để tiếp tục sau khi tin qua.
 """
         self._send_message(msg)
     
+    def send_message(self, text: str, chat_id: str = None):
+        """Gửi tin nhắn - Public method"""
+        self._send_message(text, chat_id)
+    
     def _send_message(self, text: str, chat_id: str = None):
-        """Gửi tin nhắn"""
+        """Gửi tin nhắn - Internal method"""
         try:
             self.bot.send_message(
                 chat_id or self.chat_id,

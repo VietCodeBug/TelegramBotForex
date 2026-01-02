@@ -401,6 +401,133 @@ NHỚ: Confidence < 70 → action PHẢI là "WAIT"
                 'reason': 'Demo: Phát hiện Upthrust tại Order Block bearish'
             }
     
+    def analyze_chart_image(self, image_url: str, signal_data: Dict = None) -> Dict:
+        """
+        Phân tích ảnh chart từ Telegram bằng Gemini Vision
+        
+        Args:
+            image_url: URL ảnh chart từ Telegram
+            signal_data: Thông tin tín hiệu (nếu có) để cross-check
+            
+        Returns:
+            Dict với: trend, support_levels, resistance_levels, 
+                     recommendation, confidence, reason
+        """
+        if not self.model:
+            return {
+                'trend': 'UNKNOWN',
+                'support_levels': [],
+                'resistance_levels': [],
+                'recommendation': 'SKIP',
+                'confidence': 0,
+                'reason': 'AI không khả dụng'
+            }
+        
+        try:
+            # Download image
+            import requests
+            from PIL import Image
+            from io import BytesIO
+            
+            response = requests.get(image_url, timeout=10)
+            img = Image.open(BytesIO(response.content))
+            
+            # Build prompt
+            signal_context = ""
+            if signal_data:
+                signal_context = f"""
+THÔNG TIN TÍN HIỆU:
+- Action: {signal_data.get('action', 'N/A')}
+- Entry: {signal_data.get('entry', 'N/A')}
+- Stop Loss: {signal_data.get('stoploss', 'N/A')}
+- Take Profit: {signal_data.get('takeprofit', 'N/A')}
+"""
+            
+            prompt = f"""
+🎯 PHÂN TÍCH CHART VÀNG (XAU/USD)
+
+Bạn là chuyên gia phân tích kỹ thuật. Hãy phân tích chart này và trả lời:
+
+{signal_context}
+
+📊 YÊU CẦU PHÂN TÍCH:
+1. **XU HƯỚNG**: Uptrend / Downtrend / Sideways / Consolidation
+2. **CẤU TRÚC**: Higher Highs/Higher Lows hay Lower Highs/Lower Lows?
+3. **SUPPORT/RESISTANCE**: Xác định các mức giá quan trọng (tối đa 3 mức mỗi loại)
+4. **PATTERN**: Phát hiện pattern (Triangle, H&S, Double Top/Bottom, Flag, Wedge...)
+5. **ĐỘNG LỰC**: Price action vs tín hiệu có phù hợp không?
+6. **KHUYẾN NGHỊ**: Nên THEO hay BỎ QUA tín hiệu này?
+
+Trả lời theo format JSON:
+```json
+{{
+    "trend": "UPTREND | DOWNTREND | SIDEWAYS | CONSOLIDATION",
+    "structure": "BULLISH | BEARISH | NEUTRAL",
+    "support_levels": [2650, 2645, 2640],
+    "resistance_levels": [2670, 2680, 2690],
+    "pattern": "tên pattern nếu có",
+    "recommendation": "FOLLOW | CAUTION | SKIP",
+    "confidence": 0-100,
+    "reason": "lý do ngắn gọn bằng tiếng Việt (max 100 chữ)"
+}}
+```
+
+⚠️ LƯU Ý:
+- Nếu không thấy rõ support/resistance thì để mảng rỗng []
+- Reason phải NGẮN GỌN, DỄ HIỂU
+- Confidence dựa trên độ rõ ràng của chart
+"""
+            
+            # Call Gemini Vision
+            response = self.model.generate_content([prompt, img])
+            result_text = response.text.strip()
+            
+            # Parse JSON response
+            import json
+            json_match = re.search(r'\{[^{}]*\}', result_text, re.DOTALL)
+            
+            if json_match:
+                result = json.loads(json_match.group())
+                return {
+                    'trend': result.get('trend', 'UNKNOWN'),
+                    'structure': result.get('structure', 'NEUTRAL'),
+                    'support_levels': result.get('support_levels', []),
+                    'resistance_levels': result.get('resistance_levels', []),
+                    'pattern': result.get('pattern', ''),
+                    'recommendation': result.get('recommendation', 'CAUTION'),
+                    'confidence': result.get('confidence', 50),
+                    'reason': result.get('reason', 'Phân tích chart'),
+                    'raw_analysis': result_text[:300]  # Backup
+                }
+            
+            # Fallback if can't parse JSON
+            return {
+                'trend': 'UNKNOWN',
+                'support_levels': [],
+                'resistance_levels': [],
+                'recommendation': 'CAUTION',
+                'confidence': 0,
+                'reason': 'Không parse được kết quả AI',
+                'raw_analysis': result_text[:300]
+            }
+            
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Image download error: {e}")
+            return {
+                'trend': 'UNKNOWN',
+                'recommendation': 'SKIP',
+                'confidence': 0,
+                'reason': f'Không tải được ảnh: {str(e)[:50]}'
+            }
+        except Exception as e:
+            print(f"❌ Chart analysis error: {e}")
+            return {
+                'trend': 'UNKNOWN',
+                'recommendation': 'SKIP',
+                'confidence': 0,
+                'reason': f'Lỗi phân tích: {str(e)[:50]}'
+            }
+    
     def translate_to_vietnamese(self, text: str) -> str:
         """Dịch text sang tiếng Việt"""
         if not self.model:

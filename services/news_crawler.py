@@ -135,13 +135,21 @@ class NewsCrawler:
                 
                 # Parse tin tức có format: 🇺🇸 Hoa Kỳ : Event...
                 if any(flag in text for flag in ['🇺🇸', '🇪🇺', '🇬🇧', '🇯🇵', '🇨🇳', '🇦🇺', '🇨🇦', '🇨🇭', '🇻🇳']):
-                    # Xác định impact từ số sao
-                    if '⭐⭐⭐⭐⭐' in text or '⭐⭐⭐⭐☆' in text:
+                    # Đếm số sao để xác định impact
+                    star_count = text.count('⭐')
+                    if star_count >= 4:
                         impact = 'HIGH'
-                    elif '⭐⭐⭐' in text:
+                    elif star_count >= 2:
                         impact = 'MEDIUM'
                     else:
                         impact = 'LOW'
+                    
+                    # Các từ khóa quan trọng -> nâng lên HIGH
+                    high_keywords = ['CPI', 'NFP', 'Non-Farm', 'FOMC', 'Fed', 'GDP', 'PMI', 
+                                     'Interest Rate', 'Lãi suất', 'Lạm phát', 'Thất nghiệp']
+                    if any(kw.lower() in text.lower() for kw in high_keywords):
+                        if impact != 'HIGH':
+                            impact = 'MEDIUM'  # Nâng lên ít nhất MEDIUM
                     
                     # Xác định tốt/xấu
                     is_positive = '🟢' in text
@@ -159,6 +167,18 @@ class NewsCrawler:
                         currency = 'CNY'
                     elif '🇻🇳' in text:
                         currency = 'VND'
+                    elif '🇦🇺' in text:
+                        currency = 'AUD'
+                    elif '🇨🇦' in text:
+                        currency = 'CAD'
+                    elif '🇨🇭' in text:
+                        currency = 'CHF'
+                    elif '🇸🇬' in text:
+                        currency = 'SGD'
+                    elif '🇰🇷' in text:
+                        currency = 'KRW'
+                    elif '🇮🇳' in text:
+                        currency = 'INR'
                     
                     # Extract event name (after country name)
                     event_match = re.search(r'[A-Z][a-z]+\s*:\s*(.+?)(?:🔴|🟢|Trước đó)', text)
@@ -452,23 +472,39 @@ class NewsCrawler:
             )
         ]
     
-    def get_high_impact_news(self, currency: str = 'USD') -> List[NewsEvent]:
+    def get_high_impact_news(self, currency: str = None) -> List[NewsEvent]:
         """
-        Chỉ lấy tin QUAN TRỌNG (High Impact) cho một loại tiền
+        Lấy tin QUAN TRỌNG (High/Medium Impact)
+        
+        Args:
+            currency: Lọc theo tiền tệ (None = tất cả)
         """
         all_events = self.get_economic_calendar()
         
-        high_impact = [
+        # Lọc tin HIGH hoặc MEDIUM
+        important_events = [
             e for e in all_events 
-            if e.impact == 'HIGH' and currency.upper() in e.currency.upper()
+            if e.impact in ['HIGH', 'MEDIUM']
         ]
+        
+        # Lọc theo currency nếu có
+        if currency:
+            important_events = [
+                e for e in important_events
+                if currency.upper() in e.currency.upper()
+            ]
+        
+        # Nếu không có HIGH/MEDIUM, lấy tất cả và sort
+        if not important_events:
+            important_events = all_events[:10]
         
         # Dịch sang tiếng Việt
         if self.model:
-            for event in high_impact:
-                event.title_vi = self._translate_event(event.event)
+            for event in important_events:
+                if not event.title_vi:
+                    event.title_vi = self._translate_event(event.event)
         
-        return high_impact
+        return important_events
     
     def _translate_event(self, event_name: str) -> str:
         """Dịch tên sự kiện sang tiếng Việt"""
