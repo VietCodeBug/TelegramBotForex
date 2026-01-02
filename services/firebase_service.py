@@ -195,6 +195,120 @@ class FirebaseService:
         
         if self.initialized:
             self._make_request('POST', 'logs', log_entry)
+    
+    def save_external_signal(self, signal: dict, ai_analysis: dict = None) -> str:
+        """
+        Lưu tín hiệu từ kênh Telegram bên ngoài
+        
+        Args:
+            signal: Dict với source, action, entry, sl, tp
+            ai_analysis: Kết quả phân tích AI
+            
+        Returns:
+            ID của signal
+        """
+        signal_data = {
+            'timestamp': datetime.now().isoformat(),
+            'source': signal.get('source', 'unknown'),
+            'symbol': signal.get('symbol', 'XAUUSD'),
+            'action': signal.get('action', 'N/A'),
+            'entry': signal.get('entry', 0),
+            'stoploss': signal.get('stoploss', 0),
+            'takeprofit': signal.get('takeprofit', 0),
+            'status': 'PENDING',
+            'raw_text': signal.get('raw_text', '')[:200],
+        }
+        
+        if ai_analysis:
+            signal_data['ai_recommendation'] = ai_analysis.get('recommendation', 'N/A')
+            signal_data['ai_confidence'] = ai_analysis.get('confidence', 0)
+            signal_data['ai_reason'] = ai_analysis.get('reason', '')
+        
+        if self.initialized:
+            result = self._make_request('POST', 'external_signals', signal_data)
+            if result and 'name' in result:
+                return result['name']
+        
+        return None
+    
+    def get_external_signals(self, source: str = None, limit: int = 20) -> List[Dict]:
+        """
+        Lấy lịch sử tín hiệu từ kênh ngoài
+        
+        Args:
+            source: Lọc theo nguồn (optional)
+            limit: Số lượng tối đa
+        """
+        if not self.initialized:
+            return []
+        
+        try:
+            result = self._make_request('GET', 'external_signals')
+            if not result:
+                return []
+            
+            signals = []
+            for key, value in result.items():
+                if isinstance(value, dict):
+                    value['id'] = key
+                    
+                    # Filter by source if specified
+                    if source and value.get('source') != source:
+                        continue
+                    
+                    signals.append(value)
+            
+            # Sort by timestamp desc
+            signals.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            return signals[:limit]
+            
+        except Exception as e:
+            return []
+    
+    def update_signal_result(self, signal_id: str, result: str, pips: float = 0):
+        """
+        Cập nhật kết quả của tín hiệu (WIN/LOSS)
+        
+        Args:
+            signal_id: ID của signal
+            result: 'WIN' hoặc 'LOSS'
+            pips: Số pip lời/lỗ
+        """
+        if not self.initialized or not signal_id:
+            return
+        
+        update_data = {
+            'status': result,
+            'pips_result': pips,
+            'closed_at': datetime.now().isoformat()
+        }
+        
+        self._make_request('PATCH', f'external_signals/{signal_id}', update_data)
+    
+    def get_signal_stats(self, source: str = None) -> Dict:
+        """
+        Thống kê WIN/LOSS của tín hiệu
+        
+        Args:
+            source: Lọc theo nguồn (optional)
+        """
+        signals = self.get_external_signals(source=source, limit=100)
+        
+        wins = sum(1 for s in signals if s.get('status') == 'WIN')
+        losses = sum(1 for s in signals if s.get('status') == 'LOSS')
+        pending = sum(1 for s in signals if s.get('status') == 'PENDING')
+        total_pips = sum(s.get('pips_result', 0) for s in signals)
+        
+        win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+        
+        return {
+            'total': len(signals),
+            'wins': wins,
+            'losses': losses,
+            'pending': pending,
+            'win_rate': round(win_rate, 1),
+            'total_pips': round(total_pips, 1)
+        }
 
 
 # Quick test

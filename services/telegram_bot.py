@@ -24,7 +24,9 @@ class TelegramCommandBot:
         'status': '📊 Kiểm tra trạng thái Bot & Cấu hình',
         'stop': '🛑 Tạm dừng Bot (Khi có tin mạnh)',
         'news': '📰 Tin tức kinh tế hôm nay',
-        'tintuc': '📃 Lấy tin tức + dịch sang tiếng Việt'
+        'tintuc': '📃 Lấy tin tức + dịch sang tiếng Việt',
+        'signals': '📡 Xem tín hiệu từ các kênh Telegram',
+        'stats': '📊 Thống kê WIN/LOSS của các kênh'
     }
     
     def __init__(self, token: str, chat_id: str, firebase_service=None):
@@ -46,6 +48,8 @@ class TelegramCommandBot:
         self.on_get_history: Optional[Callable] = None
         self.on_get_tintuc: Optional[Callable] = None  # Tin tức tiếng Việt
         self.on_get_news: Optional[Callable] = None
+        self.on_get_signals: Optional[Callable] = None  # Tín hiệu từ kênh
+        self.on_get_stats: Optional[Callable] = None  # Thống kê tín hiệu
         
         # User configs (từ Firebase hoặc local)
         self.user_config = {
@@ -103,6 +107,14 @@ class TelegramCommandBot:
         @self.bot.message_handler(commands=['tintuc'])
         def handle_tintuc(message):
             self._cmd_tintuc(message)
+        
+        @self.bot.message_handler(commands=['signals'])
+        def handle_signals(message):
+            self._cmd_signals(message)
+        
+        @self.bot.message_handler(commands=['stats'])
+        def handle_stats(message):
+            self._cmd_stats(message)
     
     def _cmd_start(self, message):
         """Handler cho /start"""
@@ -332,6 +344,32 @@ Bot sẽ tiếp tục gửi tín hiệu.
                 self._send_message(f"❌ Lỗi: {str(e)[:100]}", message.chat.id)
         else:
             self._send_message("📃 Chức năng tin tức tiếng Việt chưa được kết nối.", message.chat.id)
+    
+    def _cmd_signals(self, message):
+        """Handler cho /signals - Tín hiệu từ các kênh Telegram"""
+        self._send_message("📡 *Đang lấy tín hiệu từ các kênh...*\n⏳ Vui lòng chờ...", message.chat.id)
+        
+        if self.on_get_signals:
+            try:
+                signals = self.on_get_signals()
+                self._send_message(signals, message.chat.id)
+            except Exception as e:
+                self._send_message(f"❌ Lỗi: {str(e)[:100]}", message.chat.id)
+        else:
+            self._send_message("📡 Chức năng tín hiệu chưa được kết nối.", message.chat.id)
+    
+    def _cmd_stats(self, message):
+        """Handler cho /stats - Thống kê WIN/LOSS"""
+        self._send_message("📊 *Đang lấy thống kê...*\n⏳ Vui lòng chờ...", message.chat.id)
+        
+        if self.on_get_stats:
+            try:
+                stats = self.on_get_stats()
+                self._send_message(stats, message.chat.id)
+            except Exception as e:
+                self._send_message(f"❌ Lỗi: {str(e)[:100]}", message.chat.id)
+        else:
+            self._send_message("📊 Chức năng thống kê chưa được kết nối.", message.chat.id)
     
     def send_news_alert(self, news_event, minutes_until: int):
         """

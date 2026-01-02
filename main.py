@@ -49,6 +49,7 @@ from services.telegram_bot import TelegramCommandBot
 from services.risk_manager import RiskManager
 from services.firebase_service import FirebaseService
 from services.news_crawler import NewsCrawler
+from services.signal_crawler import SignalCrawler
 
 
 def display_banner():
@@ -127,6 +128,15 @@ class WyckoffBot:
         self._setup_telegram_callbacks()
         print("✅")
         
+        # 9. Signal Crawler (Telegram channels)
+        print("📡 Initializing Signal Crawler...", end=" ")
+        self.signal_crawler = SignalCrawler(self.firebase)
+        print("✅")
+        
+        # Track last signal check
+        self.last_signal_check = None
+        self.known_signals = set()  # Track đã xử lý signals nào
+        
         print("-" * 50)
         print("✅ TẤT CẢ COMPONENTS ĐÃ SẴN SÀNG!\n")
     
@@ -137,6 +147,117 @@ class WyckoffBot:
         self.telegram.on_get_history = self.get_history_text
         self.telegram.on_get_news = self.get_news_text
         self.telegram.on_get_tintuc = self.get_tintuc_text  # Tin tức tiếng Việt
+        self.telegram.on_get_signals = self.get_signals_text  # Tín hiệu từ kênh
+        self.telegram.on_get_stats = self.get_signal_stats_text  # Thống kê
+    
+    def check_external_signals(self):
+        """
+        Kiểm tra tín hiệu mới từ các kênh Telegram
+        Nếu có tín hiệu mới → AI phân tích → Gửi thông báo
+        """
+        try:
+            signals = self.signal_crawler.crawl_all_channels()
+            
+            new_signals = []
+            for sig in signals:
+                # Tạo unique key để track
+                sig_key = f"{sig.source}_{sig.action}_{sig.entry}"
+                
+                if sig_key not in self.known_signals:
+                    self.known_signals.add(sig_key)
+                    new_signals.append(sig)
+            
+            # Xử lý tín hiệu mới
+            for sig in new_signals[:3]:  # Xử lý tối đa 3 tín hiệu cùng lúc
+                print(f"📡 New signal: {sig.action} {sig.symbol} @ {sig.entry} from @{sig.source}")
+                
+                # Lấy giá hiện tại
+                rt = self.fetcher.get_realtime_price()
+                current_price = rt.get('price') if rt else None
+                
+                # AI phân tích
+                ai_result = self.ai.analyze_external_signal(sig.to_dict(), current_price)
+                
+                # Gửi thông báo
+                self._send_signal_notification(sig, ai_result, current_price)
+                
+                # Lưu vào Firebase
+                if self.firebase:
+                    self.firebase.save_external_signal(sig.to_dict(), ai_result)
+            
+            return len(new_signals)
+            
+        except Exception as e:
+            print(f"❌ Signal check error: {e}")
+            return 0
+    
+    def _send_signal_notification(self, signal, ai_result, current_price=None):
+        """Gửi thông báo tín hiệu mới qua Telegram (kèm ảnh nếu có)"""
+        emoji = '🟢' if signal.action == 'BUY' else '🔴'
+        rec_emoji = '✅' if ai_result.get('recommendation') == 'FOLLOW' else '⚠️' if ai_result.get('recommendation') == 'CAUTION' else '❌'
+        
+        message = f"""
+📡 *TÍN HIỆU MỚI TỪ KÊNH*
+━━━━━━━━━━━━━━━━━━
+
+{emoji} *{signal.action} {signal.symbol}*
+📍 Entry: {signal.entry}
+🛡️ SL: {signal.stoploss}
+🎯 TP: {signal.takeprofit}
+📢 Source: @{signal.source}
+
+{rec_emoji} *AI NHẬN ĐỊNH:*
+📊 Recommendation: {ai_result.get('recommendation', 'N/A')}
+💯 Confidence: {ai_result.get('confidence', 0)}%
+📝 {ai_result.get('reason', 'N/A')}
+
+{"💰 Giá hiện tại: $" + str(current_price) if current_price else ""}
+⏰ {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+"""
+        
+        try:
+            # Gửi ảnh chart nếu có
+            if hasattr(signal, 'image_url') and signal.image_url:
+                try:
+                    self.telegram.bot.send_photo(
+                        self.telegram.chat_id,
+                        signal.image_url,
+                        caption=message,
+                        parse_mode='Markdown'
+                    )
+                    print(f"📸 Đã gửi ảnh chart từ @{signal.source}")
+                except Exception as img_err:
+                    # Fallback: gửi text nếu không gửi được ảnh
+                    print(f"⚠️ Không gửi được ảnh: {img_err}")
+                    self.telegram.send_message(message)
+            else:
+                self.telegram.send_message(message)
+        except Exception as e:
+            print(f"❌ Send notification error: {e}")
+    
+    def get_signals_text(self) -> str:
+        """Lấy tín hiệu mới nhất từ các kênh"""
+        return self.signal_crawler.format_for_telegram()
+    
+    def get_signal_stats_text(self) -> str:
+        """Lấy thống kê WIN/LOSS của các kênh"""
+        if not self.firebase:
+            return "⚠️ Firebase chưa được kết nối."
+        
+        stats = self.firebase.get_signal_stats()
+        
+        return f"""
+📊 *THỐNG KÊ TÍN HIỆU*
+━━━━━━━━━━━━━━━━━━
+
+📈 Tổng số: {stats.get('total', 0)}
+✅ Win: {stats.get('wins', 0)}
+❌ Loss: {stats.get('losses', 0)}
+⏳ Pending: {stats.get('pending', 0)}
+
+🎯 Win Rate: {stats.get('win_rate', 0)}%
+💰 Total Pips: {stats.get('total_pips', 0)}
+"""
     
     def analyze_market(self) -> dict:
         """
@@ -421,6 +542,17 @@ class WyckoffBot:
                         print("🎯 Gửi TÍN HIỆU ĐẦY ĐỦ về Telegram...")
                         self.telegram.send_wyckoff_signal(signal)
                         print("✅ Đã gửi tín hiệu!")
+                
+                # 📡 CHECK EXTERNAL SIGNALS - Auto check từ các kênh Telegram
+                print("\n📡 Checking external signals from Telegram channels...")
+                try:
+                    new_signals_count = self.check_external_signals()
+                    if new_signals_count > 0:
+                        print(f"✅ Found {new_signals_count} new signals!")
+                    else:
+                        print("📭 No new signals from channels")
+                except Exception as e:
+                    print(f"⚠️ Signal check error: {str(e)[:50]}")
                 
                 print(f"\n😴 Nghỉ {LOOP_INTERVAL//60} phút... (Loop tiếp theo lúc {(datetime.now() + timedelta(seconds=LOOP_INTERVAL)).strftime('%H:%M:%S')})")
                 time.sleep(LOOP_INTERVAL)

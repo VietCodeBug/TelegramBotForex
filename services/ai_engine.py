@@ -92,7 +92,7 @@ class WyckoffAIEngine:
     Sử dụng Gemini 2.5 Pro
     """
     
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-pro"):
+    def __init__(self, api_key: str, model_name: str = "gemini-2.0-flash"):
         """
         Args:
             api_key: Google API Key
@@ -169,6 +169,88 @@ class WyckoffAIEngine:
             )
         )
         return result
+    
+    def analyze_external_signal(self, signal_data: Dict, current_price: float = None) -> Dict:
+        """
+        Phân tích tín hiệu từ kênh Telegram bên ngoài
+        
+        Args:
+            signal_data: Dict với source, action, entry, sl, tp
+            current_price: Giá hiện tại (nếu có)
+            
+        Returns:
+            Dict với recommendation, confidence, reason
+        """
+        if not self.model:
+            return {
+                'recommendation': 'UNKNOWN',
+                'confidence': 0,
+                'reason': 'AI không khả dụng'
+            }
+        
+        prompt = f"""
+🎯 PHÂN TÍCH TÍN HIỆU TRADING TỪ KÊNH TELEGRAM
+
+📊 TÍN HIỆU:
+- Nguồn: @{signal_data.get('source', 'unknown')}
+- Lệnh: {signal_data.get('action', 'N/A')}
+- Symbol: {signal_data.get('symbol', 'XAUUSD')}
+- Entry: {signal_data.get('entry', 'N/A')}
+- Stop Loss: {signal_data.get('stoploss', 'N/A')}
+- Take Profit: {signal_data.get('takeprofit', 'N/A')}
+{"- Giá hiện tại: " + str(current_price) if current_price else ""}
+
+📋 YÊU CẦU:
+1. Đánh giá tín hiệu này có HỢP LÝ không?
+2. Risk/Reward ratio có tốt không?
+3. Entry point có hợp lý không?
+4. Nên THEO hay BỎ QUA tín hiệu này?
+
+Trả lời theo format JSON:
+```json
+{{
+    "recommendation": "FOLLOW" | "SKIP" | "CAUTION",
+    "confidence": <0-100>,
+    "risk_reward": "<X:X>",
+    "reason": "<lý do ngắn gọn tiếng Việt>"
+}}
+```
+"""
+        
+        try:
+            response = self.model.generate_content(prompt)
+            return self._parse_signal_analysis(response.text, signal_data)
+        except Exception as e:
+            return {
+                'recommendation': 'SKIP',
+                'confidence': 0,
+                'reason': f'Lỗi AI: {str(e)[:50]}'
+            }
+    
+    def _parse_signal_analysis(self, response_text: str, original_signal: Dict) -> Dict:
+        """Parse response từ AI cho external signal"""
+        import json
+        
+        try:
+            json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                return {
+                    'recommendation': result.get('recommendation', 'SKIP'),
+                    'confidence': result.get('confidence', 0),
+                    'risk_reward': result.get('risk_reward', 'N/A'),
+                    'reason': result.get('reason', 'Không có nhận định'),
+                    'original_signal': original_signal
+                }
+        except:
+            pass
+        
+        return {
+            'recommendation': 'SKIP',
+            'confidence': 0,
+            'reason': 'Không parse được response',
+            'original_signal': original_signal
+        }
     
     def _build_prompt(self, market_data: str, indicators: Dict,
                       wyckoff: Dict = None, smc: Dict = None, 

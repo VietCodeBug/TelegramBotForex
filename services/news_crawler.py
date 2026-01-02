@@ -75,11 +75,20 @@ class NewsCrawler:
     def get_economic_calendar(self) -> List[NewsEvent]:
         """
         Lấy lịch kinh tế hôm nay
-        Priority: NASDAQ API > CafeF (no more ForexFactory)
+        Priority: Telegram @lichkinhte > NASDAQ API > CafeF
         """
         events = []
         
-        # Try NASDAQ first (US Economic Calendar - reliable)
+        # Try Telegram channel first (Vietnamese - most relevant)
+        try:
+            events = self._crawl_telegram_lichkinhte()
+            if events:
+                print(f"✅ Telegram @lichkinhte: {len(events)} events loaded")
+                return events
+        except Exception as e:
+            pass  # Silent fail
+        
+        # Try NASDAQ (US Economic Calendar - reliable)
         try:
             events = self._crawl_nasdaq()
             if events:
@@ -99,6 +108,89 @@ class NewsCrawler:
         
         # Return empty if all fail
         return []
+    
+    def _crawl_telegram_lichkinhte(self) -> List[NewsEvent]:
+        """
+        Lấy tin tức từ Telegram channel @lichkinhte via web preview
+        Channel này cập nhật lịch kinh tế tiếng Việt rất tốt
+        """
+        url = "https://t.me/s/lichkinhte"
+        
+        try:
+            response = self.session.get(url, timeout=10)
+            if response.status_code != 200:
+                return []
+            
+            if not BS4_AVAILABLE:
+                return []
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            messages = soup.find_all('div', class_='tgme_widget_message_text')
+            
+            events = []
+            today = datetime.now().strftime("%d/%m")
+            
+            for msg in messages[-20:]:  # Lấy 20 tin mới nhất
+                text = msg.get_text(strip=True)
+                
+                # Parse tin tức có format: 🇺🇸 Hoa Kỳ : Event...
+                if any(flag in text for flag in ['🇺🇸', '🇪🇺', '🇬🇧', '🇯🇵', '🇨🇳', '🇦🇺', '🇨🇦', '🇨🇭', '🇻🇳']):
+                    # Xác định impact từ số sao
+                    if '⭐⭐⭐⭐⭐' in text or '⭐⭐⭐⭐☆' in text:
+                        impact = 'HIGH'
+                    elif '⭐⭐⭐' in text:
+                        impact = 'MEDIUM'
+                    else:
+                        impact = 'LOW'
+                    
+                    # Xác định tốt/xấu
+                    is_positive = '🟢' in text
+                    is_negative = '🔴' in text
+                    
+                    # Parse currency
+                    currency = 'USD'
+                    if '🇪🇺' in text:
+                        currency = 'EUR'
+                    elif '🇬🇧' in text:
+                        currency = 'GBP'
+                    elif '🇯🇵' in text:
+                        currency = 'JPY'
+                    elif '🇨🇳' in text:
+                        currency = 'CNY'
+                    elif '🇻🇳' in text:
+                        currency = 'VND'
+                    
+                    # Extract event name (after country name)
+                    event_match = re.search(r'[A-Z][a-z]+\s*:\s*(.+?)(?:🔴|🟢|Trước đó)', text)
+                    event_name = event_match.group(1).strip() if event_match else text[:80]
+                    
+                    # Extract actual value
+                    actual_match = re.search(r'Thực tế\s*:\s*([^\n]+)', text)
+                    actual = actual_match.group(1).strip() if actual_match else ''
+                    
+                    # Extract forecast
+                    forecast_match = re.search(r'Kì vọng\s*:\s*([^\n]+)', text)
+                    forecast = forecast_match.group(1).strip() if forecast_match else '--'
+                    
+                    # Extract previous
+                    prev_match = re.search(r'Trước đó\s*:\s*([^\n]+)', text)
+                    previous = prev_match.group(1).strip() if prev_match else ''
+                    
+                    events.append(NewsEvent(
+                        time=datetime.now().strftime("%H:%M"),
+                        currency=currency,
+                        impact=impact,
+                        event=event_name,
+                        forecast=forecast,
+                        previous=previous,
+                        actual=actual,
+                        title_vi=event_name
+                    ))
+            
+            return events
+            
+        except Exception as e:
+            return []
     
     def _crawl_nasdaq(self) -> List[NewsEvent]:
         """
