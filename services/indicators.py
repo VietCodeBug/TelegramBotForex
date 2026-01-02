@@ -1,16 +1,27 @@
 """
 Technical Indicators Module - Tính toán các chỉ báo kỹ thuật
-RSI, MACD, EMA, ATR sử dụng pandas_ta
+RSI, MACD, EMA, ATR sử dụng pandas_ta hoặc ta library
 """
 import pandas as pd
 import numpy as np
 
+# Try pandas-ta first (Python 3.12+), then ta library (Python 3.11 compatible)
+TA_AVAILABLE = False
+TA_LIB_TYPE = None  # "pandas_ta" or "ta"
+
 try:
     import pandas_ta as ta
     TA_AVAILABLE = True
+    TA_LIB_TYPE = "pandas_ta"
 except ImportError:
-    TA_AVAILABLE = False
-    print("⚠️ pandas-ta not installed. Using basic calculations.")
+    try:
+        import ta as ta_lib
+        TA_AVAILABLE = True
+        TA_LIB_TYPE = "ta"
+        print("✅ Using 'ta' library (Python 3.11 compatible)")
+    except ImportError:
+        TA_AVAILABLE = False
+        print("⚠️ No TA library installed. Using basic calculations.")
 
 
 def calculate_indicators(df: pd.DataFrame, 
@@ -33,7 +44,8 @@ def calculate_indicators(df: pd.DataFrame,
     """
     df = df.copy()
     
-    if TA_AVAILABLE:
+    if TA_AVAILABLE and TA_LIB_TYPE == "pandas_ta":
+        # Use pandas_ta (Python 3.12+)
         # RSI
         df['RSI'] = ta.rsi(df['close'], length=rsi_period)
         
@@ -51,11 +63,10 @@ def calculate_indicators(df: pd.DataFrame,
             df['MACD_Signal'] = macd['MACDs_12_26_9']
             df['MACD_Hist'] = macd['MACDh_12_26_9']
         
-        # Bollinger Bands (bonus) - wrap in try/except for column name variations
+        # Bollinger Bands (bonus)
         try:
             bb = ta.bbands(df['close'], length=20)
             if bb is not None and not bb.empty:
-                # Try to find the columns dynamically
                 for col in bb.columns:
                     if 'BBU' in col:
                         df['BB_Upper'] = bb[col]
@@ -64,7 +75,34 @@ def calculate_indicators(df: pd.DataFrame,
                     elif 'BBM' in col:
                         df['BB_Middle'] = bb[col]
         except Exception:
-            pass  # Skip Bollinger Bands if error
+            pass
+            
+    elif TA_AVAILABLE and TA_LIB_TYPE == "ta":
+        # Use ta library (Python 3.11 compatible)
+        # RSI
+        df['RSI'] = ta_lib.momentum.RSIIndicator(df['close'], window=rsi_period).rsi()
+        
+        # EMA
+        df['EMA_50'] = ta_lib.trend.EMAIndicator(df['close'], window=ema_fast).ema_indicator()
+        df['EMA_200'] = ta_lib.trend.EMAIndicator(df['close'], window=ema_slow).ema_indicator()
+        
+        # ATR
+        df['ATR'] = ta_lib.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=atr_period).average_true_range()
+        
+        # MACD
+        macd_indicator = ta_lib.trend.MACD(df['close'])
+        df['MACD'] = macd_indicator.macd()
+        df['MACD_Signal'] = macd_indicator.macd_signal()
+        df['MACD_Hist'] = macd_indicator.macd_diff()
+        
+        # Bollinger Bands
+        try:
+            bb = ta_lib.volatility.BollingerBands(df['close'], window=20)
+            df['BB_Upper'] = bb.bollinger_hband()
+            df['BB_Lower'] = bb.bollinger_lband()
+            df['BB_Middle'] = bb.bollinger_mavg()
+        except Exception:
+            pass
     else:
         # Fallback: Basic calculations
         df = _calculate_rsi_basic(df, rsi_period)
