@@ -230,12 +230,11 @@ Nếu không chắc chắn → Chọn NO (an toàn hơn)
 """
             
             signal = self.ai.analyze(
-                market_data=self.fetcher.format_for_ai(df),
+                market_data=self.fetcher.format_for_ai(df) + "\n\n" + prompt_override,
                 indicators={'price': current_price, 'wyckoff': str(wyckoff_result), 'smc': str(smc_result)},
                 wyckoff_analysis=wyckoff_result,
                 smc_analysis=smc_result,
-                news_context=str([n.event for n in important_news[:3]]),
-                prompt_override=prompt_override
+                news_context=str([n.event for n in important_news[:3]])
             )
             
             action = signal.get('action', 'NO')
