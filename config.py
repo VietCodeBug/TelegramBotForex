@@ -53,5 +53,11 @@ EMA_SLOW = 200
 ATR_PERIOD = 14
 
 # ============== BOT SETTINGS ==============
-LOOP_INTERVAL = 3600  # 1 hour (was 900 = 15 min) - Reduced to prevent spam
+# Check interval - 2 minutes for fast signal detection
+LOOP_INTERVAL = 120  # 2 minutes - Fast signal & news checking
+
+# Real-time thresholds (kept for future use)
+SIGNAL_CHECK_INTERVAL = 120  # 2 minutes
+NEWS_CHECK_INTERVAL = 300     # 5 minutes
+
 ERROR_RETRY_INTERVAL = 60  # Thử lại sau 60s nếu lỗi
