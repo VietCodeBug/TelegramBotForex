@@ -483,15 +483,23 @@ Sử dụng /stop để tiếp tục sau khi tin qua.
         self._send_message(text, chat_id)
     
     def _send_message(self, text: str, chat_id: str = None):
-        """Gửi tin nhắn - Internal method"""
+        """Gửi tin nhắn - Internal method (NO Markdown to avoid parse errors)"""
         try:
             self.bot.send_message(
                 chat_id or self.chat_id,
-                text,
-                parse_mode='Markdown'
+                text
+                # No parse_mode - plain text only to avoid errors
             )
         except Exception as e:
             print(f"❌ Telegram send error: {e}")
+            # Fallback: try sending error message without formatting
+            try:
+                self.bot.send_message(
+                    chat_id or self.chat_id,
+                    f"Error: {str(e)[:100]}"
+                )
+            except:
+                pass
     
     def send_wyckoff_signal(self, signal: Dict):
         """
